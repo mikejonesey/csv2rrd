@@ -1,0 +1,193 @@
+#!/bin/bash
+
+function getColor(){
+	dsi="$1"
+	if [ "$dsi" == "1" ]; then
+		echo "4848FF"
+	elif [ "$dsi" == "2" ]; then
+		echo "FF68DD"
+	elif [ "$dsi" == "3" ]; then
+		echo "9669FE"
+	elif [ "$dsi" == "4" ]; then
+		echo "800080"
+	elif [ "$dsi" == "5" ]; then
+		echo "FF8300"
+	elif [ "$dsi" == "6" ]; then
+		echo "CCFF00"
+	elif [ "$dsi" == "7" ]; then
+		echo "23819C"
+	elif [ "$dsi" == "8" ]; then
+		echo "F70000"
+	elif [ "$dsi" == "9" ]; then
+		echo "01F33E"
+	elif [ "$dsi" == "10" ]; then
+		echo "1FCB4A"
+	elif [ "$dsi" == "11" ]; then
+		echo "59955C"
+	elif [ "$dsi" == "12" ]; then
+		echo "2DC800"
+	elif [ "$dsi" == "13" ]; then
+		echo "9D9D00"
+	elif [ "$dsi" == "14" ]; then
+		echo "222222"
+	elif [ "$dsi" == "15" ]; then
+		echo "DFE32D"
+	elif [ "$dsi" == "16" ]; then
+		echo "B05F3C"
+	elif [ "$dsi" == "17" ]; then
+		echo "62D0FF"
+	elif [ "$dsi" == "18" ]; then
+		echo "999999"
+	elif [ "$dsi" == "19" ]; then
+		echo "F206FF"
+	elif [ "$dsi" == "20" ]; then
+		echo "C0E0DA"
+	else
+		echo "6755E3"
+	fi
+}
+
+function dropSecs(){
+	date -d "$(date -d @"$1" +"%Y-%m-%d %H:%M:00")" +"%s"
+}
+
+function csv2rrd(){
+	i="0"
+	myCsv="$1"
+	myRrd="$2"
+	date1="$(head -2 $myCsv | tail -1 | awk 'BEGIN{FS=","}{print $1}')"
+	date2="$(head -3 $myCsv | tail -1 | awk 'BEGIN{FS=","}{print $1}')"
+	#daily...
+	#dateDiff=$(($(printf "%.0f" "$(echo "scale=1; "$(($date2-$date1))"/86400" | bc)")*86400))
+	#new outfunc with drop secs...
+	date1="$(dropSecs $date1)"
+	date2="$(dropSecs $date2)"
+	dateDiff=$(($date2-$date1))
+	NoDataLines=$((`cat "$myCsv" | wc -l`-1))
+	export FFrrdLast
+	while read aline; do
+		if [ "$i" -gt 1 -a -n "$FFrrdLast" -a "$FFrrdLast" != "" ]; then
+			if [ "$i" -lt "$FFrrdLast" ]; then
+				#line already processed...
+				#echo "$i skipped..." >&2
+				((i++))
+				continue
+			fi
+		fi			
+		ii=1
+		aline=$(echo $aline | tr "\"" "\n" | while read stringLine; do 
+			if [ $((ii%2)) -eq 0 ]; then 
+				echo "$stringLine" | sed 's/,/~COMMA~/g'
+			else 
+				echo "$stringLine"
+			fi
+			((ii++))
+		done | sed ':a;N;$!ba;s/\n//g')
+		if [ "$i" -eq "0" ]; then
+			if [ -f "$myRrd" ]; then
+				#rrd, already exists...
+				FFrrdLastd=$(rrdtool last "$myRrd")
+				FFrrdLast=$(nl -ba "$myCsv" | grep "$FFrrdLastd" | awk '{print $1}')
+				#echo "DEBUG999:$FFrrdLast" >&2
+				((i++))
+				continue
+			fi
+			fields=$(echo "$aline" | tr "," "\n" | wc -l)
+			addField="1"
+			DATA_FIELDS=$(while [ "$addField" -lt "$fields" ]; do
+				echo -n "DS:$(echo "$aline" | tr "," "\n" | head -$(($addField+1)) | tail -1 | cut -c 1-19):ABSOLUTE:$dateDiff:NaN:NaN "
+				((addField++))
+			done)
+			#echo "" >&2
+			#echo "DEBUG1001: creating rrd... " >&2
+			rrdtool create -s "$dateDiff" "$myRrd" -b "$(($date1-$dateDiff))" \
+				$DATA_FIELDS \
+				RRA:MAX:0:1:$NoDataLines
+			rrdCResp=$?
+			#echo "" >&2
+			echo rrdtool create -s "$dateDiff" "$myRrd" -b "$(($date1-$dateDiff))" \
+				$DATA_FIELDS \
+				RRA:MAX:0:1:$NoDataLines
+			#echo "" >&2
+			#echo "DEBUG1002: rrd create response: [ $rrdCResp ]... " >&2
+			#echo "" >&2
+		else
+			#The Row is Data
+			echo "Updating: $(echo "$aline" | sed 's/,/:/g')"
+			#newDate=$(date -d "$(date -d @$(echo "$aline" | awk 'BEGIN{FS=","}{print $1}') +"%F")" +"%s")
+			newDate=$(dropSecs "$(echo "$aline" | awk 'BEGIN{FS=","}{print $1}')")
+			#echo "DEBUG3001:$newDate">&2
+			rrdtool updatev "$myRrd" "$newDate:$(echo "$aline" | sed -e 's/,/#/' -e 's/.*#//' -e 's/,/:/g')"
+		fi
+		((i++))
+	done < "$myCsv"
+}
+
+function buildGraph(){
+	rrdFile="$1"
+	imageName="$2"
+	graphTitle="$3"
+	fieldLim="$4"
+	dateStart="$5"
+	dateEnd="$6"
+
+	if [ -n "$fieldLim" ]; then
+		fieldLim=$(echo "$fieldLim" | tr "," "\n" | cut -c 1-19 | tr "\n" "|" | sed 's/|$/\n/')
+	fi
+
+	#build defs...
+	allDS=$(rrdtool info "$rrdFile" | grep ^ds | grep -o "\[[a-zA-Z]*\]" | sed -e 's/\[//' -e 's/\]//' | uniq | while read aDS; do
+		((dsi++))
+		if [ -n "$fieldLim" ]; then
+			if [ -z "$(echo "$aDS" | grep -E "$fieldLim")" ]; then
+				continue
+			fi
+		fi
+		echo "DEF:$aDS=$rrdFile:$aDS:MAX "CDEF:"$aDS"a=$aDS,1800,*" LINE1:"$aDS"a#$(getColor "$dsi"):$aDS "
+	done)
+
+	#cont...
+
+	if [ -z "$dateStart" ]; then
+		dateStart=$(rrdtool first "$rrdFile")
+	fi
+
+	if [ -z "$dateEnd" ]; then
+		dateEnd=$(rrdtool last "$rrdFile")
+	fi
+
+#	--dynamic-labels\
+#	--zoom 2\
+#	--watermark ""\
+#       --grid-dash 1:10\
+#	--border 1\
+
+	rrdtool graph "$imageName"\
+	--start $dateStart\
+	--end $dateEnd\
+	--lower-limit 0\
+	--height 150\
+	--width 670\
+	--units-exponent 0\
+	--title "$graphTitle"\
+	--x-grid WEEK:1:DAY:1:HOUR:3:1:"%H:%M"\
+		\
+	$allDS > /dev/null
+}
+
+function lastMonthStart(){
+	date -d "$(date +"%Y")-$(date +"%m")-01 -1 month" +"%s"
+}
+
+function lastMonthEnd(){
+	date -d "$(date +"%Y")-$(date +"%m")-01 -1 day" +"%s"
+}
+
+function thisMonthStart(){
+	date -d "$(date +"%Y")-$(date +"%m")-01" +"%s"
+}
+
+function thisMonthEnd(){
+	date +"%s"
+}
+
