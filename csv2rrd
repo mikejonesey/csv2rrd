@@ -60,8 +60,8 @@ function csv2rrd(){
 	#daily...
 	#dateDiff=$(($(printf "%.0f" "$(echo "scale=1; "$(($date2-$date1))"/86400" | bc)")*86400))
 	#new outfunc with drop secs...
-	date1="$(dropSecs $date1)"
-	date2="$(dropSecs $date2)"
+	#date1="$(dropSecs $date1)"
+	#date2="$(dropSecs $date2)"
 	dateDiff=$(($date2-$date1))
 	NoDataLines=$((`cat "$myCsv" | wc -l`-1))
 	export FFrrdLast
@@ -115,9 +115,11 @@ function csv2rrd(){
 			#The Row is Data
 			echo "Updating: $(echo "$aline" | sed 's/,/:/g')"
 			#newDate=$(date -d "$(date -d @$(echo "$aline" | awk 'BEGIN{FS=","}{print $1}') +"%F")" +"%s")
-			newDate=$(dropSecs "$(echo "$aline" | awk 'BEGIN{FS=","}{print $1}')")
+			#newDate=$(dropSecs "$(echo "$aline" | awk 'BEGIN{FS=","}{print $1}')")
+			newDate=$(echo "$(echo "$aline" | awk 'BEGIN{FS=","}{print $1}')")
 			#echo "DEBUG3001:$newDate">&2
-			rrdtool updatev "$myRrd" "$newDate:$(echo "$aline" | sed -e 's/,/#/' -e 's/.*#//' -e 's/,/:/g')"
+			echo "$newDate:$(echo "$aline" | sed -e 's/,/#/' -e 's/.*#//' -e 's/,/:/g')"
+			rrdtool updatev "$myRrd" "$newDate:$(echo "$aline" | sed -e 's/,/#/' -e 's/.*#//' -e 's/,/:/g')" #-e 's/,/#/' -e 's/.*#//' 
 		fi
 		((i++))
 	done < "$myCsv"
@@ -143,7 +145,7 @@ function buildGraph(){
 				continue
 			fi
 		fi
-		echo "DEF:$aDS=$rrdFile:$aDS:MAX "CDEF:"$aDS"a=$aDS,1800,*" LINE1:"$aDS"a#$(getColor "$dsi"):$aDS "
+		echo "DEF:$aDS=$rrdFile:$aDS:MAX "CDEF:"$aDS"a=$aDS,1,*" LINE1:"$aDS"a#$(getColor "$dsi"):$aDS "
 	done)
 
 	#cont...
@@ -166,11 +168,11 @@ function buildGraph(){
 	--start $dateStart\
 	--end $dateEnd\
 	--lower-limit 0\
-	--height 150\
-	--width 670\
+	--height 700\
+	--width 900\
 	--units-exponent 0\
 	--title "$graphTitle"\
-	--x-grid WEEK:1:DAY:1:HOUR:3:1:"%H:%M"\
+	--x-grid WEEK:1:DAY:1:HOUR:3:1:"%H:%M:%S"\
 		\
 	$allDS > /dev/null
 }
